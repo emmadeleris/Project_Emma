@@ -1,12 +1,5 @@
 % We are only working on the no TMR part of the data!
 
-% Should I create a table first and append rows to it iteratively during
-% the for loop or create empty arrays, populate them, and then convert them
-% into a table?
-
-% Can I directly preprocess my EEG data with only the channels I need for
-% the 'detecting events' section, or do I need to keep it as is?
-
 %% Set paths and code variables
 clear all
 
@@ -34,12 +27,12 @@ for ievent = 1:length(eventTypes)
     end
 end
 
-% Initialize subjectsTable with the column names
+% Initialise the subjectsTable with the column names
 subjectsTable = cell2table(cell(0, length(columnNames)), 'VariableNames', columnNames);
 
 %% For loop
 
-for isubject = 1:1%height(subjects) % why was it better to use height over length here?
+for isubject = 1:height(subjects) % why was it better to use height over length here?
     isubjectFolder = fullfile(subjects(isubject).folder, subjects(isubject).name);
 
     signalFile.folder = fullfile(isubjectFolder, "night");
@@ -53,8 +46,7 @@ for isubject = 1:1%height(subjects) % why was it better to use height over lengt
     data.label = cellfun(@(x) x(5:end-4), data.label, 'UniformOutput', false); % Fix label naming
 
     %% Preprocessing (e.g. changing reference to M1 and M2)
-    % VERY IMPORTANT: Preprocess EEG and Respiration separately (but even
-    % before line 43?)
+    % VERY IMPORTANT: Preprocess EEG and Respiration separately
 
     % For EEG:
     cfg             = [];
@@ -101,7 +93,7 @@ for isubject = 1:1%height(subjects) % why was it better to use height over lengt
 
     % Perform SO detection
     cfg                     = [];
-    cfg.bpfreq              = [0.3 1.25]; % This sets a band-pass filter with a frequency range of 0.3 Hz to 1.25 Hz. This is the typical frequency range for SOs
+    cfg.bpfreq              = [0.3 1.25]; % Sets a band-pass filter with a frequency range of 0.3 Hz to 1.25 Hz, which is the typical frequency range for SOs
     cfg.slStages            = [2 3]; % Specifies that the detection is limited to sleep stages 2 and 3
 
     cfg.thresCh             = dataEEG.label; % specifies the EEG channels (all of those listed in dataEEG) that will be used for thresholding in the detection process (the thresholding step typically involves defining a cutoff value for detecting significant events)
@@ -112,11 +104,11 @@ for isubject = 1:1%height(subjects) % why was it better to use height over lengt
     cfg.criterionLen        = [0.8, 2]; % sets the criteria for the duration of an SO, in seconds
     cfg.criterionParam      = 'both'; % detection criteria is based on both the duration and amplitude of the SO
     cfg.criterionCenter     = 'mean'; % the threshold is based on the mean amplitude
-    cfg.criterionVar        = 'scaleCenter'; % a scaling factor is applied to determine variability for detection - we adjust the detection threshold to be 1.5 times the standard deviation (or other variability measures) of the signal, effectively making the detection criteria more sensitive to variations in the signal
-    cfg.criterionScale      = 1.5; % this scaling factor is 1.5, which is often considered a good balance for many types of biological signals
-    cfg.criterionPadding    = [0, 0]; % padding would be the addition of extra space or time around the data being analysed. In this case, there is none in either direction (unit: seconds)
+    cfg.criterionVar        = 'scaleCenter'; % scaling factor is applied to determine variability for detection - we adjust the detection threshold to be 1.5 times the standard deviation (or other variability measures) of the signal, effectively making the detection criteria more sensitive to variations in the signal
+    cfg.criterionScale      = 1.5; % scaling factor is 1.5, which is often considered a good balance for many types of biological signals
+    cfg.criterionPadding    = [0, 0]; % padding (if on) would be the addition of extra space or time around the data being analysed; in this case, there is none in either direction (unit: seconds)
 
-    cfg.findEvtFree         = 0; % this indicates that we are not searching for event-free windows in the data
+    cfg.findEvtFree         = 0; % indicates that we are not searching for event-free windows in the data
     cfg.findEvtFreeWin      = 300; % sets the duration of the event-free window to 300
 
     outSODetect             = slythm.detectSOs_splitStages(cfg, dataEEG); % will be stored in 'outSODetect'
@@ -133,17 +125,17 @@ for isubject = 1:1%height(subjects) % why was it better to use height over lengt
 
     cfg.filtType     = 'fir'; % uses a Finite Impulse Response (FIR) filter, another type of filter commonly used in EEG signal processing
 
-    cfg.envelopeType = 'rms'; % applies an RMS (root mean square) envelope to the spindle signal, which is a common technique to quantify signal amplitude
+    cfg.envelopeType = 'rms'; % applies an RMS (root mean square) envelope to the spindle signal, a common technique to quantify signal amplitude
     cfg.envelopeWin  = 0.2; % window size is set to 0.2 seconds (slides/moves across the signal), smoothing the signal to help detect spindles
 
     cfg.criterionLen = [0.5, 3]; % spindle duration is constrained to be between 0.5 and 3 seconds
 
     cfg.criterionCenter     = 'mean';
-    cfg.criterionVar        = 'sdCenter'; % normalises the data not just by centring it around its mean, but also scales it according to its standard deviation (divides it by the SD, so the resulting data will have a mean of zero and a standard deviation of one)
+    cfg.criterionVar        = 'sdCenter'; % normalises the data not just by centring it around its mean, but also scales it according to its standard deviation (divides it by the SD, so the resulting data will have a mean of 0 and a standard deviation of 1)
     cfg.criterionScale      = 1.5;
     cfg.criterionPadding    = [0, 0];
 
-    cfg.searchIndivEvtPeak  = 0; % algorithm will not search for individual peaks within the detected spindle events. Instead, it will focus on detecting the spindle events as a whole without dissecting them into smaller peaks
+    cfg.searchIndivEvtPeak  = 0; % algorithm will not search for individual peaks within the detected spindle events, instead, it will focus on detecting the spindle events as a whole without dissecting them into smaller peaks
     cfg.searchMargin        = 1; % specifies a time margin (1 second) around detected events to look for additional features or characteristics (algorithm may consider events that occur within 1 second of a detected spindle as relevant)
 
     cfg.mergeEvts           = 0; % algorithm will not merge events even if they are close in time
@@ -286,3 +278,4 @@ end
 
 % Save the overall table to a .mat file
 save('subjectsTable.mat', 'subjectsTable');
+writetable(subjectsTable, 'subjectsTable.xlsx');
