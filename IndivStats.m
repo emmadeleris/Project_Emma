@@ -27,8 +27,24 @@ for ievent = 1:length(eventTypes)
     end
 end
 
-% Initialise the subjectsTable with the column names
+% Add mean phase and mean p-value columns for each event type
+for ievent = 1:length(eventTypes)
+    columnNames{end+1} = [eventTypes{ievent}, '_Mean_Phase'];
+    columnNames{end+1} = [eventTypes{ievent}, '_Mean_pVal'];
+    columnNames{end+1} = [eventTypes{ievent}, '_Mean_pVal_FDR']; % FDR-corrected p-value
+end
+
+% Define StageDurations as a nested table (stored as a cell inside the main table)
+StageDurationsTemplate = array2table(zeros(1,5), 'VariableNames', {'Wake', 'N1', 'N2', 'N3', 'REM'});
+
+% Add subject-specific metadata and extra columns
+columnNames = [{'SubjectID', 'Age', 'Gender'}, columnNames, {'StageDurations', 'TST'}];
+
+% Initialise the main subjectsTable
 subjectsTable = cell2table(cell(0, length(columnNames)), 'VariableNames', columnNames);
+
+% Convert the StageDurations column into a table stored within a cell
+subjectsTable.StageDurations = repmat({StageDurationsTemplate}, height(subjectsTable), 1);
 
 %% For loop
 
@@ -37,6 +53,12 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
 
     signalFile.folder = fullfile(isubjectFolder, "night");
     signalFile.name = 'night_noTMR_Segment_0.edf';
+
+    % Extract Subject ID (last part of folder path)
+    subjectID = subjects(isubject).name;
+    Age =
+    Gender =
+    TST =
 
     %% Load the data (don't forget the hypnogramme!)
     cfg = [];
@@ -68,7 +90,14 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
     cfg = [];
     data_all = ft_appenddata(cfg, dataEEG, dataResp);
 
+    % Calculate duration of sleep stages
     hypnoFile = dir(fullfile(signalFile.folder, "hypno_noTMR.txt"));
+    hypnoData = load(fullfile(hypnoFile.folder, hypnoFile.name)); 
+    sleepStages = hypnoData(:,1);
+
+    stageCodes = [0, 1, 2, 3, 5]; % Wake, N1, N2, N3, REM
+    stageDurations = array2table(arrayfun(@(s) sum(sleepStages == s) * 30 / 60, stageCodes), ...
+                                 'VariableNames', {'Wake', 'N1', 'N2', 'N3', 'REM'});
 
     % Downsampling
     cfg             = [];
@@ -188,7 +217,7 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
     cfg.output   = 'pow'; % Requests the power spectrum as the output
     cfg.method   = 'mtmfft'; % Uses multi-taper method for frequency analysis via fast Fourier transform (FFT)
     cfg.taper    = 'hanning'; % Uses a Hanning window for spectral analysis (which helps reduce spectral leakage)
-    cfg.foi      = 0.08:0.01:1; % 1/cfg1.length  = 1; % Frequency of interest ranging from 0.08 to 2 Hz (appropriate for respiration frequencies)
+    cfg.foi      = 0.08:0.01:1; % 1/cfg1.length  = 1; % specifies the range of frequencies of interest, from 0.08 Hz to 1 Hz with a step size of 0.01 Hz
     spect        = ft_freqanalysis(cfg, data2_segm); % Performs the frequency analysis on the redefined segments
 
     [val, ind] = max(spect.powspctrm); % Finds the maximum power value in the spectrum, returning both the value and its index
@@ -231,6 +260,8 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
     % Loop through each event type
     for ievent = 1:length(eventTypes)
         event = eventTypes{ievent};
+        meanPhases = [];  % Store phase values for averaging
+        pValues = [];     % Store p-values for FDR correction
 
         % Select event times based on event type
         switch event
@@ -250,22 +281,58 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
             if ismember(channel, selectedFrontalChannels)
 
                 % Extract respiratory phases for the current event and channel
-                eventTimes = eventTimesForEvent{ichann}; % Use the event times from the first channel, since Resp is the only channel % though should thid maybe be maxTime or sth else?
+                eventTimes = eventTimesForEvent{ichann}; % Use the event times from the first channel, since Resp is the only channel % though should this maybe be maxTime or sth else?
                 respPhases = resp_phase(eventTimes);        % Extract respiratory phases using these times
 
-                % Calculate circular mean phase and Rayleigh test p-value
+                % Calculate circular mean phase and V-test p-value
                 meanPhase = circ_mean(respPhases');
-                [pVal, ~] = circ_rtest(respPhases);
+                [pVal, zval] = circ_vtest(respPhases);
+
+                % Store values for later averaging
+                meanPhases = [meanPhases, meanPhase];
+                pValues = [pValues, pVal];
 
                 % Store the results in the pre-allocated arrays
                 colIndex = find(isnan(rowValues), 1);  % Calculate column index
                 rowValues(colIndex) = meanPhase;
                 rowValues(colIndex + 1) = pVal;
 
-                % Optionally store p-values in the pvals_all structure
+                % Optionally store p-values in the pvals_all structure for
+                % FDR correction
                 pvals_all.(event)(ichann) = pVal;
             end
         end
+
+        % Compute the mean of preferred phases across channels
+        if ~isempty(meanPhases)
+            avgMeanPhase = mean(meanPhases);
+        else
+            avgMeanPhase = NaN;
+        end
+
+        % Apply FDR correction to p-values
+        if ~isempty(pValues)
+            corrPval_fdr = FDR(pValues', 0.05);  % Indices of significant p-values
+            pValues_FDR = pValues;
+            pValues_FDR(setdiff(1:length(pValues), corrPval_fdr)) = 0;  % Set non-significant p-values to 0
+            avgPVal = mean(pValues);  % Mean of uncorrected p-values
+            avgPVal_FDR = mean(pValues_FDR);  % Mean of FDR-corrected p-values
+        else
+            avgPVal = NaN;
+            avgPVal_FDR = NaN;
+        end
+
+        % Store the computed values in the table
+        rowValues(find(strcmp(columnNames, [event '_Mean_Phase']), 1)) = avgMeanPhase;
+        rowValues(find(strcmp(columnNames, [event '_Mean_pVal']), 1)) = avgPVal;
+        rowValues(find(strcmp(columnNames, [event '_Mean_pVal_FDR']), 1)) = avgPVal_FDR;
+
+        rowValues{find(strcmp(columnNames, 'SubjectID'), 1)} = subjectID;
+        rowValues{find(strcmp(columnNames, 'Age'), 1)} = Age;
+        rowValues{find(strcmp(columnNames, 'Gender'), 1)} = Gender;
+        rowValues{find(strcmp(columnNames, 'StageDurations'), 1)} = {stageDurations};  % Store as nested table
+        rowValues{find(strcmp(columnNames, 'TST'), 1)} = TST;
+
     end
 
     % Create a table for storing results of all subjects
@@ -273,6 +340,12 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
     subjectsTable = [subjectsTable; newRow];  % Append newRow to the pre-defined subjectsTable
 
     %% We store relevant information from EACH subject
+
+    %% See how many individual participants have significant p-values in each column (out of valid datapoints)
+    % This is the line I used in my command window for individual columns –
+    % try and integrate it in the above for loop maybe?
+
+    % disp([sum(subjectsTable.SO_Spindle_Fz_pVal < 0.05), sum(~isnan(subjectsTable.SO_Spindle_Fz_pVal))]);
 
 end
 
