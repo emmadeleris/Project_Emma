@@ -3,11 +3,35 @@
 %% Set paths and code variables
 clear all
 
-subjectsFolder = "/Users/emma/Desktop/München/MSc Learning Sciences/RP Schreiner/Data analysis/subjects/s*";
+base_dir = "/Users/emma/Desktop/München/MSc Learning Sciences/RP Schreiner/Data analysis";
+subjectsFolder = fullfile(base_dir, "/subjects/s*");
+fieldtrip_path = "toolbox/fieldtrip-20240916";
+breathmetrics_path = "toolbox/breathmetrics";
+circstat_path = "toolbox/CircStat2012a";
 subjects = dir(subjectsFolder);
 
 fs = 512;
 new_fs = 256;
+
+toolbox_paths = {fieldtrip_path, breathmetrics_path, circstat_path};
+
+addpath("/Users/emma/Downloads/FDR.m");
+
+for i = 1:length(toolbox_paths)
+    toolbox_path = toolbox_paths{i};
+
+    toolbox_path = fullfile(base_dir, toolbox_path);
+    addpath(toolbox_path);
+
+    files = dir(toolbox_path);
+    subFolders = {files([files.isdir]).name};
+    subFolders = subFolders(~ismember(subFolders, {'.', '..'}));
+    fullSubFolders = fullfile(toolbox_path, subFolders);
+    for j = 1:length(fullSubFolders)
+        addpath(fullSubFolders{j});  % Add each subfolder to the path
+    end
+
+end
 
 % Create an empty table with predefined column names and types
 subjectsTable = table();
@@ -15,7 +39,7 @@ subjectsTable = table();
 % Predefine the variable names for subjectsTable
 eventTypes = {'SO', 'Spindle', 'SO_Spindle'};
 channels = {'F1', 'F2', 'F3', 'F5', 'Fz'};
-statistics = {'Mean', 'pVal'};
+statistics = {'Mean', 'pVal', 'zVal'};
 
 % Create a cell array to hold column names
 columnNames = {};
@@ -38,13 +62,10 @@ end
 StageDurationsTemplate = array2table(zeros(1,5), 'VariableNames', {'Wake', 'N1', 'N2', 'N3', 'REM'});
 
 % Add subject-specific metadata and extra columns
-columnNames = [{'SubjectID', 'Age', 'Gender'}, columnNames, {'StageDurations', 'TST'}];
+columnNames = [{'SubjectID', 'Age', 'Gender'}, columnNames, {'TST'}, StageDurationsTemplate.Properties.VariableNames];
 
 % Initialise the main subjectsTable
 subjectsTable = cell2table(cell(0, length(columnNames)), 'VariableNames', columnNames);
-
-% Convert the StageDurations column into a table stored within a cell
-subjectsTable.StageDurations = repmat({StageDurationsTemplate}, height(subjectsTable), 1);
 
 %% For loop
 
@@ -56,9 +77,6 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
 
     % Extract Subject ID (last part of folder path)
     subjectID = subjects(isubject).name;
-    Age =
-    Gender =
-    TST =
 
     %% Load the data (don't forget the hypnogramme!)
     cfg = [];
@@ -84,7 +102,7 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
     dataResp = ft_selectdata(cfg, data);
 
     dataResp.label{1,1} = 'Resp'; % Rename channel BIP7 to Resp
-    dataResp.trial{1,1} = dataResp.trial{1,1}*1e6; % Scale the signal from Volts to mV
+    dataResp.trial{1,1} = dataResp.trial{1,1}*1e6; % Scale the signal from Volts to uV
 
     % Append EEG and Resp data
     cfg = [];
@@ -92,12 +110,12 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
 
     % Calculate duration of sleep stages
     hypnoFile = dir(fullfile(signalFile.folder, "hypno_noTMR.txt"));
-    hypnoData = load(fullfile(hypnoFile.folder, hypnoFile.name)); 
+    hypnoData = load(fullfile(hypnoFile.folder, hypnoFile.name));
     sleepStages = hypnoData(:,1);
 
     stageCodes = [0, 1, 2, 3, 5]; % Wake, N1, N2, N3, REM
     stageDurations = array2table(arrayfun(@(s) sum(sleepStages == s) * 30 / 60, stageCodes), ...
-                                 'VariableNames', {'Wake', 'N1', 'N2', 'N3', 'REM'});
+        'VariableNames', {'Wake', 'N1', 'N2', 'N3', 'REM'});
 
     % Downsampling
     cfg             = [];
@@ -112,6 +130,12 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
     cfg.type         = 'plain'; % import hypno without scored arousal (or do we need to modify this?)
     cfg.slStLen      = 30; % set the sleep stage length (or epoch duration) to 30 seconds – to properly align the hypnogramme data with the electrophysiological data in data_all
     data_all         = slythm.importHypnogram(cfg, data_all); % create a folder (+slythm) and put the importHypnogram function in it and import it
+
+    % This part is added newly to downsample dataResp to match the dataResp
+    % shape with data_all and dataEEG
+    cfg = [];
+    cfg.channel = {'Resp'};
+    dataResp = ft_selectdata(cfg, data_all);
 
     %% Detect events IN THE EEG (specific channels) - check detecting algos from Esteban
 
@@ -205,7 +229,7 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
     dataResp.trial{1,1} = dataResp.trial{1,1}(:,mask_NREM); % filters the trials to keep only those segments where the subject is in NREM sleep
     dataResp.sampleinfo = [1, sum(mask_NREM)]; % updates the sample information to reflect the new length of the data after filtering (sum of the 1s in the logical array)
     dataResp.time{1,1} = dataResp.time{1,1}(:,mask_NREM); % adjusts the time vector to match the filtered trial data
-
+    
     cfg          = [];
     cfg.length   = 60;
     cfg.overlap  = 0;
@@ -241,9 +265,9 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
 
     %% Check for circular uniformity test for each channel and store the individual values (CircStat toolbox)
     % For every event, every F (1,2,3,5,z) channel, collect in the table the circular
-    % mean and the p-value from the Rayleigh test
+    % mean and the p-value from the v test
     % for each channel we do a histogramme of the means of each participant
-    % once we have that we also do a Rayleigh test of that (in different
+    % once we have that we also do a v test of that (in different
     % sections)
 
     % Define the list of channels to include
@@ -255,13 +279,14 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
     pvals_all = struct();  % Store p-values for all event types
 
     % Pre-allocate arrays based on column names
-    rowValues = NaN(1, length(columnNames));
+    rowValues = cell(1, length(columnNames));
 
     % Loop through each event type
     for ievent = 1:length(eventTypes)
         event = eventTypes{ievent};
         meanPhases = [];  % Store phase values for averaging
         pValues = [];     % Store p-values for FDR correction
+        vValues = [];
 
         % Select event times based on event type
         switch event
@@ -286,16 +311,19 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
 
                 % Calculate circular mean phase and V-test p-value
                 meanPhase = circ_mean(respPhases');
-                [pVal, zval] = circ_vtest(respPhases);
+                [pVal, vval] = circ_vtest(respPhases, 0);
 
                 % Store values for later averaging
                 meanPhases = [meanPhases, meanPhase];
                 pValues = [pValues, pVal];
+                vValues = [vValues, vval];
 
                 % Store the results in the pre-allocated arrays
-                colIndex = find(isnan(rowValues), 1);  % Calculate column index
-                rowValues(colIndex) = meanPhase;
-                rowValues(colIndex + 1) = pVal;
+                columnName = sprintf('%s_%s_Mean', eventTypes{ievent}, channels{ichann});
+                colIndex = find(strcmp(columnNames, columnName), 1); % Calculate column index
+                rowValues{colIndex} = meanPhase;
+                rowValues{colIndex + 1} = pVal;
+                rowValues{colIndex + 2} = vval;
 
                 % Optionally store p-values in the pvals_all structure for
                 % FDR correction
@@ -322,33 +350,44 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
             avgPVal_FDR = NaN;
         end
 
-        % Store the computed values in the table
-        rowValues(find(strcmp(columnNames, [event '_Mean_Phase']), 1)) = avgMeanPhase;
-        rowValues(find(strcmp(columnNames, [event '_Mean_pVal']), 1)) = avgPVal;
-        rowValues(find(strcmp(columnNames, [event '_Mean_pVal_FDR']), 1)) = avgPVal_FDR;
+        % % correct for multiple comparisons usinf FDR (in Thomas's paper)
+        % corrPval_fdr     = FDR(pval', 0.05);
+        % corrPval_FDR     = pval;
+        % corrPval_FDR(setdiff(1:end,corrPval_fdr)) = 0;
+        %
+        % zVal_FDR = zval;
+        % zVal_FDR(setdiff(1:end,corrPval_fdr))     = 0;
 
-        rowValues{find(strcmp(columnNames, 'SubjectID'), 1)} = subjectID;
-        rowValues{find(strcmp(columnNames, 'Age'), 1)} = Age;
-        rowValues{find(strcmp(columnNames, 'Gender'), 1)} = Gender;
-        rowValues{find(strcmp(columnNames, 'StageDurations'), 1)} = {stageDurations};  % Store as nested table
-        rowValues{find(strcmp(columnNames, 'TST'), 1)} = TST;
+        rowValues{find(strcmp(columnNames, [event '_Mean_Phase']), 1)} = avgMeanPhase;
+        rowValues{find(strcmp(columnNames, [event '_Mean_pVal']), 1)} = avgPVal;
+        rowValues{find(strcmp(columnNames, [event '_Mean_pVal_FDR']), 1)} = avgPVal_FDR;
 
     end
 
+    % Store the computed values in the table
+    rowValues{find(strcmp(columnNames, 'SubjectID'), 1)} = subjectID;
+    rowValues{find(strcmp(columnNames, 'Age'), 1)} = 25;
+    rowValues{find(strcmp(columnNames, 'Gender'), 1)} = 'F';
+
+    %%
+
     % Create a table for storing results of all subjects
     newRow = array2table(rowValues, 'VariableNames', columnNames);
+
+    newRow.Wake = stageDurations.Wake;
+    newRow.N1 = stageDurations.N1;
+    newRow.N2 = stageDurations.N2;
+    newRow.N3 = stageDurations.N3;
+    newRow.REM = stageDurations.REM;
+
+    % Calculate total sleep time
+    newRow.TST = stageDurations.N1 + stageDurations.N2 + stageDurations.N3 + stageDurations.REM;
+
     subjectsTable = [subjectsTable; newRow];  % Append newRow to the pre-defined subjectsTable
-
-    %% We store relevant information from EACH subject
-
-    %% See how many individual participants have significant p-values in each column (out of valid datapoints)
-    % This is the line I used in my command window for individual columns –
-    % try and integrate it in the above for loop maybe?
-
-    % disp([sum(subjectsTable.SO_Spindle_Fz_pVal < 0.05), sum(~isnan(subjectsTable.SO_Spindle_Fz_pVal))]);
 
 end
 
-% Save the overall table to a .mat file
+%% Save the overall table to a .mat file
+
 save('subjectsTable.mat', 'subjectsTable');
 writetable(subjectsTable, 'subjectsTable.xlsx');
