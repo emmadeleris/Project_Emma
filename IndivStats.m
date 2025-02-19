@@ -63,13 +63,15 @@ StageDurationsTemplate = array2table(zeros(1,5), 'VariableNames', {'Wake', 'N1',
 
 % Add subject-specific metadata and extra columns
 columnNames = [{'SubjectID', 'Age', 'Gender'}, columnNames, {'TST'}, StageDurationsTemplate.Properties.VariableNames];
+% Esteban will add the Age and Gender data himself as I don't have access
+% to it
 
 % Initialise the main subjectsTable
 subjectsTable = cell2table(cell(0, length(columnNames)), 'VariableNames', columnNames);
 
 %% For loop
 
-for isubject = 1:height(subjects) % why was it better to use height over length here?
+for isubject = 1:height(subjects)
     isubjectFolder = fullfile(subjects(isubject).folder, subjects(isubject).name);
 
     signalFile.folder = fullfile(isubjectFolder, "night");
@@ -78,7 +80,7 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
     % Extract Subject ID (last part of folder path)
     subjectID = subjects(isubject).name;
 
-    %% Load the data (don't forget the hypnogramme!)
+    %% Load the data
     cfg = [];
     cfg.dataset = fullfile(signalFile.folder, signalFile.name);
     data = ft_preprocessing(cfg);
@@ -127,7 +129,7 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
     % Load hypnogram
     cfg              = [];
     cfg.hypnogram    = fullfile(hypnoFile.folder, hypnoFile.name);
-    cfg.type         = 'plain'; % import hypno without scored arousal (or do we need to modify this?)
+    cfg.type         = 'plain'; % import hypno without scored arousal
     cfg.slStLen      = 30; % set the sleep stage length (or epoch duration) to 30 seconds – to properly align the hypnogramme data with the electrophysiological data in data_all
     data_all         = slythm.importHypnogram(cfg, data_all); % create a folder (+slythm) and put the importHypnogram function in it and import it
 
@@ -257,7 +259,7 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
 
     cfg.bpfreq              = [peak_min peak_max]; % Sets the bandpass frequency range based on the peak frequency
     cfg.bpinstabilityfix    = 'reduce'; % Addresses potential instability in the filter design
-    cfg.bpfiltdir           = 'twopass'; % As in real time during the TMR % Specifies that the filter is applied in one direction, simulating real-time processing
+    cfg.bpfiltdir           = 'twopass';
     data_resp               = ft_preprocessing(cfg, data_all);
 
     resp_phase              = slythm.doubleInterpolation(data_resp.trial{1,1}(end,:), 10, 0); % Accesses the last trial of the filtered respiration data and interpolates the filtered respiration signal to derive phase information
@@ -306,7 +308,7 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
             if ismember(channel, selectedFrontalChannels)
 
                 % Extract respiratory phases for the current event and channel
-                eventTimes = eventTimesForEvent{ichann}; % Use the event times from the first channel, since Resp is the only channel % though should this maybe be maxTime or sth else?
+                eventTimes = eventTimesForEvent{ichann}; % Use the event times from the first channel, since Resp is the only channel
                 respPhases = resp_phase(eventTimes);        % Extract respiratory phases using these times
 
                 % Calculate circular mean phase and V-test p-value
@@ -325,7 +327,7 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
                 rowValues{colIndex + 1} = pVal;
                 rowValues{colIndex + 2} = vval;
 
-                % Optionally store p-values in the pvals_all structure for
+                % Store p-values in the pvals_all structure for
                 % FDR correction
                 pvals_all.(event)(ichann) = pVal;
             end
@@ -349,14 +351,6 @@ for isubject = 1:height(subjects) % why was it better to use height over length 
             avgPVal = NaN;
             avgPVal_FDR = NaN;
         end
-
-        % % correct for multiple comparisons usinf FDR (in Thomas's paper)
-        % corrPval_fdr     = FDR(pval', 0.05);
-        % corrPval_FDR     = pval;
-        % corrPval_FDR(setdiff(1:end,corrPval_fdr)) = 0;
-        %
-        % zVal_FDR = zval;
-        % zVal_FDR(setdiff(1:end,corrPval_fdr))     = 0;
 
         rowValues{find(strcmp(columnNames, [event '_Mean_Phase']), 1)} = avgMeanPhase;
         rowValues{find(strcmp(columnNames, [event '_Mean_pVal']), 1)} = avgPVal;

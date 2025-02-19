@@ -1,9 +1,33 @@
 %% Set paths and code variables
-% This needs to go directly to the subjectsTable here – to modify
 clear all
 
 populationFolder = "/Users/emma/Documents/GitHub/Project_Emma";
 load subjectsTable.mat
+
+base_dir = "/Users/emma/Desktop/München/MSc Learning Sciences/RP Schreiner/Data analysis";
+fieldtrip_path = "toolbox/fieldtrip-20240916";
+breathmetrics_path = "toolbox/breathmetrics";
+circstat_path = "toolbox/CircStat2012a";
+
+toolbox_paths = {fieldtrip_path, breathmetrics_path, circstat_path};
+
+addpath("/Users/emma/Downloads/FDR.m");
+
+for i = 1:length(toolbox_paths)
+    toolbox_path = toolbox_paths{i};
+
+    toolbox_path = fullfile(base_dir, toolbox_path);
+    addpath(toolbox_path);
+
+    files = dir(toolbox_path);
+    subFolders = {files([files.isdir]).name};
+    subFolders = subFolders(~ismember(subFolders, {'.', '..'}));
+    fullSubFolders = fullfile(toolbox_path, subFolders);
+    for j = 1:length(fullSubFolders)
+        addpath(fullSubFolders{j});  % Add each subfolder to the path
+    end
+
+end
 
 %% Check population results
 % After processing all subjects, we now check and analyse the population results
@@ -22,15 +46,27 @@ for ievent = 1:length(eventTypes)
     for ichann = 1:length(channels)
         ColumnNames{end+1} = [eventTypes{ievent}, '_', channels{ichann}, '_Mean'];
         ColumnNames{end+1} = [eventTypes{ievent}, '_', channels{ichann}, '_pVal'];
+        ColumnNames{end+1} = [eventTypes{ievent}, '_', channels{ichann}, '_VVal']; % Vector strength
+        ColumnNames{end+1} = [eventTypes{ievent}, '_', channels{ichann}, '_CircStd']; % Circular standard deviation
         ColumnNames{end+1} = [eventTypes{ievent}, '_', channels{ichann}, '_Plot'];
     end
+end
+
+% Add mean phase, mean p-value, and vector strength columns for each event type
+for ievent = 1:length(eventTypes)
+    ColumnNames{end+1} = [eventTypes{ievent}, '_Mean_Phase'];
+    ColumnNames{end+1} = [eventTypes{ievent}, '_Mean_pVal'];
+    ColumnNames{end+1} = [eventTypes{ievent}, '_Mean_VVal']; % Mean vector strength for cross-electrode
+    ColumnNames{end+1} = [eventTypes{ievent}, '_Mean_pVal_FDR']; % FDR-corrected p-value
+    ColumnNames{end+1} = [eventTypes{ievent}, '_Mean_CircStd']; % Standard deviation for cross-electrode
+    ColumnNames{end+1} = [eventTypes{ievent}, '_All_Electrodes_Plot']; % Plot for cross-electrode
 end
 
 % Create the population table
 populationTable = cell2table(cell(0, length(ColumnNames)), 'VariableNames', ColumnNames);
 
 % Loop through event types and channels to calculate across-participant stats
-rowValues = cell(1, length(ColumnNames)) % rowValues = NaN(1, length(ColumnNames)); % Initialise a row for results
+rowValues = cell(1, length(ColumnNames)); % Initialise a row for results
 for ievent = 1:length(eventTypes)
     event = eventTypes{ievent};
     for ichann = 1:length(channels)
@@ -38,49 +74,107 @@ for ievent = 1:length(eventTypes)
 
         % Construct column names for mean phases across participants
         meanColumn = [event, '_', channel, '_Mean'];
+        overallMeanColumn = [event, '_Mean_Phase'];
 
         % Extract mean phases across participants
-        participantMeans = subjectsTable.(meanColumn); % Get participant means
+        participantMeans = [subjectsTable.(meanColumn){:}]; % Get participant means
+        participantOverallMeans = [subjectsTable.(overallMeanColumn){:}]; % Get participant cross-electrode means
         participantMeans = participantMeans(~isnan(participantMeans)); % Exclude NaNs
+        participantOverallMeans = participantOverallMeans(~isnan(participantOverallMeans)); % Exclude NaNs
 
-        % Calculate the circular mean
-        popCircMean = circ_mean(participantMeans);
+        % Calculate the circular mean and circular standard deviation
+        popCircMean = circ_mean(participantMeans');
+        popCircStdv = circ_std(participantMeans');
+        popOverallCircMean = circ_mean(participantOverallMeans');
+        popOverallCircStdv = circ_std(participantOverallMeans');
 
-        % Perform Rayleigh test
-        [popPVal, ~] = circ_rtest(participantMeans);
+        % Perform v test
+        [popPVal, popVVal] = circ_vtest(participantMeans, 0);
+        [OverallPopPVal, OverallPopVVal] = circ_vtest(participantOverallMeans, 0);
 
-         % Create the circular plot
-        fig = figure('Visible', 'off'); % Generate figure but keep it hidden (can also be changed)
-        circ_plot(participantMeans, 'hist', [], 20, true, true, 'linewidth', 2);
-        title([event, ' - ', channel]);
+        % Create the circular plot for single-electrode data
+        SingleElectFigure = figure();
+        h = circ_plot(participantMeans', 'hist', [], 20, true, true, 'linewidth', 4, 'color', 'k');
+        hlines = findall(gcf, 'Type', 'line');
+        set(hlines(2), 'LineWidth', 5, 'Color', 'r');
+        set(hlines(3:11), 'LineWidth', 1);
+        title(strrep([event, ' - ', channel], '_', '-'));
 
-        % Store the results
-        colIndexMean = find(strcmp(ColumnNames, meanColumn));
-        colIndexPVal = colIndexMean + 1; % pVal column is next to the Mean column
-        colIndexPlot = colIndexMean + 2; % Plot column is next to pVal column
-        rowValues{colIndexMean} = popCircMean;
-        rowValues{colIndexPVal} = popPVal;
-        rowValues{colIndexPlot} = fig;
+        % Create the circular plot for cross-electrode data
+        CrossElectFigure = figure();
+        h = circ_plot(participantOverallMeans', 'hist', [], 20, true, true, 'linewidth', 4, 'color', 'k');
+        hlines = findall(gcf, 'Type', 'line');
+        set(hlines(2), 'LineWidth', 5, 'Color', 'r');
+        set(hlines(3:11), 'LineWidth', 1);
+        title(strrep([event, ' - All Electrodes'], '_', '-'));
+
+        % Save the circular plot in a dedicated folder
+        figDir = "/Users/emma/Documents/GitHub/Project_Emma/Population figures";
+
+        % Saving the single-electrode figure
+        SingleElectFigname = fullfile(figDir, [event, '_', channel]);
+        saveas(SingleElectFigure, SingleElectFigname, 'jpeg');
+
+        % Saving the cross-electrode figure
+        CrossElectFigname = fullfile(figDir, [event, '_All_Electrodes']);
+        saveas(CrossElectFigure, CrossElectFigname, 'jpeg');
+
+        % Store the results for the single-electrode
+        colIndexSingleElectMean = find(strcmp(ColumnNames, meanColumn));
+        colIndexSingleElectPVal = colIndexSingleElectMean + 1;
+        colIndexSingleElectVVal = colIndexSingleElectMean + 2;
+        colIndexSingleElectStdv = colIndexSingleElectMean + 3;
+        colIndexSingleElectPlot = colIndexSingleElectMean + 4;
+
+        rowValues{colIndexSingleElectMean} = popCircMean;
+        rowValues{colIndexSingleElectPVal} = popPVal;
+        rowValues{colIndexSingleElectVVal} = popVVal; % Store vector strength
+        rowValues{colIndexSingleElectStdv} = popCircStdv; % Store circular standard deviation
+        rowValues{colIndexSingleElectPlot} = SingleElectFigure;
+
+        % Store the results for the cross-electrode
+        colIndexCrossElectMean = find(strcmp(ColumnNames, [event, '_Mean_Phase']));
+        colIndexCrossElectPVal = colIndexCrossElectMean + 1;
+        colIndexCrossElectVVal = colIndexCrossElectMean + 2;
+        colIndexCrossElectFDR = colIndexCrossElectMean + 3;
+        colIndexCrossElectStdv = colIndexCrossElectMean + 4;
+        colIndexCrossElectPlot = colIndexCrossElectMean + 5;
+
+        rowValues{colIndexCrossElectMean} = popOverallCircMean;
+        rowValues{colIndexCrossElectPVal} = OverallPopPVal;
+        rowValues{colIndexCrossElectVVal} = OverallPopVVal; % Store vector strength for cross-electrode
+        rowValues{colIndexCrossElectStdv} = popOverallCircStdv; % Store circular standard deviation for cross-electrode
+        rowValues{colIndexCrossElectPlot} = CrossElectFigure;
+    end % End of inner loop (channels)
+
+    %% Apply FDR correction to p-values
+    % Assign pValues to either popPVal or OverallPopPVal (this was actually
+    % silly because I'm only working with OverallPopPVal oops)
+    pValues = popPVal;  % Default to popPVal
+    if exist('OverallPopPVal', 'var') && ~isempty(OverallPopPVal)
+        pValues = OverallPopPVal;  % Use OverallPopPVal if available
     end
-end
+
+    if ~isempty(pValues)
+        corrPval_fdr = FDR(pValues', 0.05);  % Indices of significant p-values
+        pValues_FDR = pValues;
+        pValues_FDR(setdiff(1:length(pValues), corrPval_fdr)) = 0;  % Set non-significant p-values to 0
+        avgPVal = mean(pValues);  % Mean of uncorrected p-values
+        avgPVal_FDR = mean(pValues_FDR);  % Mean of FDR-corrected p-values
+    else
+        avgPVal = NaN;
+        avgPVal_FDR = NaN;
+    end
+
+    % Store the FDR-corrected p-values for the cross-electrode analyses
+    colIndexCrossElectFDR = find(strcmp(ColumnNames, [event, '_Mean_pVal_FDR']));
+    rowValues{colIndexCrossElectFDR} = avgPVal_FDR;
+end % End of outer loop (eventTypes)
 
 % Add the calculated row to the summary table
-popRow = cell2table(rowValues, 'VariableNames', ColumnNames); % summaryRow = array2table(rowValues, 'VariableNames', ColumnNames);
+popRow = cell2table(rowValues, 'VariableNames', ColumnNames);
 populationTable = [populationTable; popRow];
 
-% Display or save the summary table
-save('populationTable.mat','populationTable');
-writetable(populationTable, 'populationTable.xlsx')
-
-% Display a figure
-figure(populationTable{1, 'SO_F1_Plot'}); % Amend line as needed
-
-%% Run population stats
-% Run statistical analysis on the population-level results (e.g., Rayleigh test across subjects)
-% Perform Rayleigh test for circular uniformity on the population means
-
-%% Check population results
-% Circ plot the means from all subjects
-
-%% Run population stats
-% Another Rayleigh test
+% Save the population table
+save('populationTable.mat', 'populationTable');
+writetable(populationTable, 'populationTable.xlsx');
